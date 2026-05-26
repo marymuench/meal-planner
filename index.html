@@ -774,6 +774,11 @@ label {
       <button class="nav-btn" data-section="pantry">🧺 Pantry</button>
       <button class="nav-btn" data-section="grocery">🛒 Grocery List</button>
     </nav>
+    <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+      <span id="syncStatus" style="font-size:12px; color:var(--text-light);"></span>
+      <button class="btn-ghost" id="settingsBtn" title="Settings">⚙️</button>
+      <button class="btn-ghost" id="lockBtn" title="Lock/Unlock editing" style="display:none;">🔒</button>
+    </div>
   </div>
 </header>
 
@@ -962,6 +967,91 @@ salt and pepper to taste" style="min-height:120px;"></textarea>
   </div>
 </div>
 
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">⚙️ Settings</h2>
+      <button class="modal-close" data-close="settingsModal">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Import / Export -->
+      <h3 style="font-family:var(--font-display); font-size:1rem; color:var(--text-mid); margin-bottom:0.75rem;">Import & Export Data</h3>
+      <p style="font-size:13px; color:var(--text-light); margin-bottom:1rem; line-height:1.6;">Already have data from a previous session? Paste it below to load it in. You can also export your current data to back it up.</p>
+      <div style="display:flex; gap:8px; margin-bottom:1rem;">
+        <button class="btn-secondary" id="exportDataBtn" style="flex:1;">📤 Export current data</button>
+        <button class="btn-secondary" id="showImportBtn" style="flex:1;">📥 Import data</button>
+      </div>
+      <div id="importArea" style="display:none;">
+        <label>Paste your exported data here</label>
+        <textarea id="importJson" placeholder='Paste JSON data here…' style="min-height:100px; font-family:monospace; font-size:12px;"></textarea>
+        <div style="display:flex; gap:8px; margin-top:8px; justify-content:flex-end;">
+          <button class="btn-ghost" id="cancelImportBtn">Cancel</button>
+          <button class="btn-primary" id="confirmImportBtn">✨ Import & Save</button>
+        </div>
+      </div>
+      <div id="exportArea" style="display:none;">
+        <label>Your data (copy all of this)</label>
+        <textarea id="exportJson" style="min-height:100px; font-family:monospace; font-size:12px;" readonly></textarea>
+        <div style="display:flex; gap:8px; margin-top:8px; justify-content:flex-end;">
+          <button class="btn-primary" id="copyExportBtn">📋 Copy to clipboard</button>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- GitHub Sync -->
+      <h3 style="font-family:var(--font-display); font-size:1rem; color:var(--text-mid); margin-bottom:0.75rem;">GitHub Sync</h3>
+      <p style="font-size:13px; color:var(--text-mid); margin-bottom:1rem; line-height:1.7;">
+        Connect to a GitHub repo to sync your data across all devices.
+      </p>
+      <div class="form-group">
+        <label>GitHub Username</label>
+        <input type="text" id="ghUser" placeholder="e.g. janedoe">
+      </div>
+      <div class="form-group">
+        <label>Repository Name</label>
+        <input type="text" id="ghRepo" placeholder="e.g. meal-planner">
+      </div>
+      <div class="form-group">
+        <label>Personal Access Token</label>
+        <input type="text" id="ghToken" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
+        <p style="font-size:12px; color:var(--text-light); margin-top:6px;">Stored only in your browser. Never sent anywhere except GitHub's API.</p>
+      </div>
+      <div class="form-group">
+        <label>Edit Password</label>
+        <input type="password" id="ghPassword" placeholder="Password to protect editing">
+        <p style="font-size:12px; color:var(--text-light); margin-top:6px;">Anyone can view, but only people with this password can add or edit.</p>
+      </div>
+      <div id="settingsStatus" style="font-size:13px; margin-top:0.5rem;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" data-close="settingsModal">Close</button>
+      <button class="btn-primary" id="saveSettingsBtn">💾 Save & Connect</button>
+    </div>
+  </div>
+</div>
+
+<!-- Unlock Modal -->
+<div class="modal-overlay" id="unlockModal">
+  <div class="modal" style="max-width:380px;">
+    <div class="modal-header">
+      <h2 class="modal-title">🔒 Enter Password</h2>
+      <button class="modal-close" data-close="unlockModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px; color:var(--text-mid); margin-bottom:1rem;">Enter the edit password to make changes.</p>
+      <input type="password" id="unlockInput" placeholder="Password…">
+      <div id="unlockError" style="color:#c94f50; font-size:13px; margin-top:8px; display:none;">Incorrect password, try again.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" data-close="unlockModal">Cancel</button>
+      <button class="btn-primary" id="unlockBtn">Unlock</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── STATE ──────────────────────────────────────────────
 let state = {
@@ -972,16 +1062,290 @@ let state = {
   groceryChecked: {}
 };
 
-function save() {
-  localStorage.setItem('mealplanner_v2', JSON.stringify(state));
-}
+// GitHub config — stored in localStorage per device
+let ghConfig = {
+  user: '',
+  repo: '',
+  token: '',
+  password: '',
+  filePath: 'data/mealplanner.json'
+};
 
-function load() {
+let isUnlocked = false; // whether this session has entered the edit password
+let fileSha = null;     // GitHub requires the current file SHA to update it
+
+function loadConfig() {
   try {
-    const d = localStorage.getItem('mealplanner_v2');
-    if (d) state = JSON.parse(d);
+    const c = localStorage.getItem('mealplanner_ghconfig');
+    if (c) ghConfig = { ...ghConfig, ...JSON.parse(c) };
   } catch(e) {}
 }
+
+function saveConfig() {
+  localStorage.setItem('mealplanner_ghconfig', JSON.stringify(ghConfig));
+}
+
+function isGitHubConfigured() {
+  return ghConfig.user && ghConfig.repo && ghConfig.token;
+}
+
+// ── SYNC STATUS ────────────────────────────────────────
+function setSyncStatus(msg, color = 'var(--text-light)') {
+  const el = document.getElementById('syncStatus');
+  el.textContent = msg;
+  el.style.color = color;
+}
+
+// ── GITHUB API ─────────────────────────────────────────
+async function githubFetch(method, path, body) {
+  const url = `https://api.github.com/repos/${ghConfig.user}/${ghConfig.repo}/contents/${path}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'Authorization': `token ${ghConfig.token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/vnd.github.v3+json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  return res;
+}
+
+async function loadFromGitHub() {
+  if (!isGitHubConfigured()) {
+    // Fall back to localStorage
+    try {
+      const d = localStorage.getItem('mealplanner_v2');
+      if (d) state = JSON.parse(d);
+    } catch(e) {}
+    return;
+  }
+
+  setSyncStatus('⏳ Syncing…');
+  try {
+    const res = await githubFetch('GET', ghConfig.filePath);
+    if (res.status === 404) {
+      // File doesn't exist yet — start fresh
+      fileSha = null;
+      setSyncStatus('✓ Connected (no data yet)', 'var(--pink-500)');
+      return;
+    }
+    if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+    const data = await res.json();
+    fileSha = data.sha;
+    const decoded = JSON.parse(atob(data.content.replace(/\n/g, '')));
+    state = { ...state, ...decoded };
+    setSyncStatus('✓ Synced', '#2e7d32');
+  } catch(e) {
+    setSyncStatus('⚠️ Sync failed', '#c94f50');
+    // Fall back to localStorage
+    try {
+      const d = localStorage.getItem('mealplanner_v2');
+      if (d) state = JSON.parse(d);
+    } catch(e2) {}
+  }
+}
+
+async function saveToGitHub() {
+  // Always save to localStorage as backup
+  localStorage.setItem('mealplanner_v2', JSON.stringify(state));
+
+  if (!isGitHubConfigured()) return;
+
+  setSyncStatus('⏳ Saving…');
+  try {
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(state, null, 2))));
+    const body = {
+      message: 'Update meal planner data',
+      content,
+      ...(fileSha ? { sha: fileSha } : {})
+    };
+    const res = await githubFetch('PUT', ghConfig.filePath, body);
+    if (!res.ok) {
+      const err = await res.json();
+      // If SHA conflict, re-fetch and retry once
+      if (res.status === 409 || res.status === 422) {
+        setSyncStatus('⏳ Resolving conflict…');
+        await loadFromGitHub();
+        await saveToGitHub();
+        return;
+      }
+      throw new Error(err.message || res.status);
+    }
+    const data = await res.json();
+    fileSha = data.content.sha;
+    setSyncStatus('✓ Saved', '#2e7d32');
+    setTimeout(() => setSyncStatus('✓ Synced', '#2e7d32'), 2000);
+  } catch(e) {
+    setSyncStatus('⚠️ Save failed', '#c94f50');
+    showToast('⚠️ Could not save to GitHub — check your settings', 4000);
+  }
+}
+
+function save() { saveToGitHub(); }
+
+// ── PASSWORD / LOCK ────────────────────────────────────
+function hasPassword() { return !!ghConfig.password; }
+
+function updateLockUI() {
+  const lockBtn = document.getElementById('lockBtn');
+  const addBtn = document.getElementById('addManualBtn');
+
+  if (hasPassword()) {
+    lockBtn.style.display = 'inline-flex';
+    lockBtn.textContent = isUnlocked ? '🔓' : '🔒';
+    lockBtn.title = isUnlocked ? 'Click to lock' : 'Click to unlock editing';
+    // Show/hide editing controls
+    document.querySelectorAll('.edit-gated').forEach(el => {
+      el.style.display = isUnlocked ? '' : 'none';
+    });
+  } else {
+    lockBtn.style.display = 'none';
+    document.querySelectorAll('.edit-gated').forEach(el => {
+      el.style.display = '';
+    });
+  }
+}
+
+function requireUnlock(callback) {
+  if (!hasPassword() || isUnlocked) { callback(); return; }
+  // Show unlock modal, store callback
+  pendingUnlockAction = callback;
+  document.getElementById('unlockInput').value = '';
+  document.getElementById('unlockError').style.display = 'none';
+  openModal('unlockModal');
+  setTimeout(() => document.getElementById('unlockInput').focus(), 100);
+}
+
+let pendingUnlockAction = null;
+
+document.getElementById('unlockBtn').addEventListener('click', () => {
+  const entered = document.getElementById('unlockInput').value;
+  if (entered === ghConfig.password) {
+    isUnlocked = true;
+    closeModal('unlockModal');
+    updateLockUI();
+    showToast('🔓 Editing unlocked!');
+    if (pendingUnlockAction) { pendingUnlockAction(); pendingUnlockAction = null; }
+  } else {
+    document.getElementById('unlockError').style.display = 'block';
+  }
+});
+
+document.getElementById('unlockInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('unlockBtn').click();
+});
+
+document.getElementById('lockBtn').addEventListener('click', () => {
+  if (isUnlocked) {
+    isUnlocked = false;
+    updateLockUI();
+    showToast('🔒 Editing locked');
+  } else {
+    requireUnlock(() => {});
+  }
+});
+
+// ── SETTINGS ───────────────────────────────────────────
+// ── IMPORT / EXPORT ────────────────────────────────────
+document.getElementById('showImportBtn').addEventListener('click', () => {
+  document.getElementById('importArea').style.display = 'block';
+  document.getElementById('exportArea').style.display = 'none';
+  document.getElementById('importJson').value = '';
+  document.getElementById('importJson').focus();
+});
+
+document.getElementById('cancelImportBtn').addEventListener('click', () => {
+  document.getElementById('importArea').style.display = 'none';
+});
+
+document.getElementById('confirmImportBtn').addEventListener('click', async () => {
+  const raw = document.getElementById('importJson').value.trim();
+  if (!raw) { showToast('Paste some data first!'); return; }
+  try {
+    const imported = JSON.parse(raw);
+    // Merge recipes and pantry, avoiding duplicates by id
+    const existingRecipeIds = new Set(state.recipes.map(r => r.id));
+    const existingPantryIds = new Set(state.pantry.map(p => p.id));
+    const newRecipes = (imported.recipes || []).filter(r => !existingRecipeIds.has(r.id));
+    const newPantry = (imported.pantry || []).filter(p => !existingPantryIds.has(p.id));
+    state.recipes = [...state.recipes, ...newRecipes];
+    state.pantry = [...state.pantry, ...newPantry];
+    await save();
+    closeModal('settingsModal');
+    renderCookbook();
+    renderPantry();
+    showToast(`✨ Imported ${newRecipes.length} recipe${newRecipes.length !== 1 ? 's' : ''} and ${newPantry.length} pantry item${newPantry.length !== 1 ? 's' : ''}!`);
+  } catch(e) {
+    showToast('⚠️ Could not read that data — make sure you copied it correctly.', 4000);
+  }
+});
+
+document.getElementById('exportDataBtn').addEventListener('click', () => {
+  document.getElementById('exportArea').style.display = 'block';
+  document.getElementById('importArea').style.display = 'none';
+  document.getElementById('exportJson').value = JSON.stringify(state, null, 2);
+});
+
+document.getElementById('copyExportBtn').addEventListener('click', () => {
+  const el = document.getElementById('exportJson');
+  el.select();
+  document.execCommand('copy');
+  showToast('📋 Copied to clipboard!');
+});
+
+
+document.getElementById('settingsBtn').addEventListener('click', () => {
+  document.getElementById('ghUser').value = ghConfig.user;
+  document.getElementById('ghRepo').value = ghConfig.repo;
+  document.getElementById('ghToken').value = ghConfig.token;
+  document.getElementById('ghPassword').value = ghConfig.password;
+  document.getElementById('settingsStatus').textContent = '';
+  document.getElementById('importArea').style.display = 'none';
+  document.getElementById('exportArea').style.display = 'none';
+  openModal('settingsModal');
+});
+
+document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
+  const user = document.getElementById('ghUser').value.trim();
+  const repo = document.getElementById('ghRepo').value.trim();
+  const token = document.getElementById('ghToken').value.trim();
+  const password = document.getElementById('ghPassword').value;
+  const statusEl = document.getElementById('settingsStatus');
+
+  if (!user || !repo || !token) {
+    statusEl.textContent = '⚠️ Please fill in username, repo, and token.';
+    statusEl.style.color = '#c94f50';
+    return;
+  }
+
+  statusEl.textContent = '⏳ Testing connection…';
+  statusEl.style.color = 'var(--text-mid)';
+
+  // Test the token by hitting the repo endpoint
+  try {
+    const res = await fetch(`https://api.github.com/repos/${user}/${repo}`, {
+      headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (res.status === 401) throw new Error('Invalid token — check it and try again.');
+    if (res.status === 404) throw new Error('Repo not found — check your username and repo name.');
+    if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+
+    ghConfig = { ...ghConfig, user, repo, token, password };
+    saveConfig();
+    if (password) { isUnlocked = false; } // re-lock after changing password
+    closeModal('settingsModal');
+    showToast('✅ Connected to GitHub!');
+    await loadFromGitHub();
+    updateLockUI();
+    renderCookbook();
+    renderPantry();
+    if (state.groceryList) renderGroceryListOutput();
+  } catch(e) {
+    statusEl.textContent = '⚠️ ' + e.message;
+    statusEl.style.color = '#c94f50';
+  }
+});
 
 // ── TOAST ──────────────────────────────────────────────
 function showToast(msg, dur = 2500) {
@@ -1046,8 +1410,8 @@ function renderCookbook() {
           <div class="recipe-name">${escHtml(r.name)}</div>
           <div class="recipe-tags">${(r.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</div>
           <div class="recipe-actions" onclick="event.stopPropagation()">
-            <button class="btn-ghost" onclick="editRecipe('${r.id}')">✏️ Edit</button>
-            <button class="btn-danger" onclick="deleteRecipe('${r.id}')">🗑 Delete</button>
+            <button class="btn-ghost" onclick="requireUnlock(() => editRecipe('${r.id}'))">✏️ Edit</button>
+            <button class="btn-danger" onclick="requireUnlock(() => deleteRecipe('${r.id}'))">🗑 Delete</button>
           </div>
         </div>
       </div>
@@ -1082,7 +1446,7 @@ function openAddModal(edit = null) {
   openModal('addRecipeModal');
 }
 
-document.getElementById('addManualBtn').addEventListener('click', () => openAddModal());
+document.getElementById('addManualBtn').addEventListener('click', () => requireUnlock(() => openAddModal()));
 
 // Tag input
 document.getElementById('addTagBtn').addEventListener('click', addTag);
@@ -1335,7 +1699,7 @@ function viewRecipe(id) {
 
   footer.innerHTML = `
     <button class="btn-secondary" data-close="viewRecipeModal">Close</button>
-    <button class="btn-primary" onclick="editRecipe('${r.id}'); closeModal('viewRecipeModal');">✏️ Edit Recipe</button>
+    <button class="btn-primary" onclick="requireUnlock(() => { editRecipe('${r.id}'); closeModal('viewRecipeModal'); })">✏️ Edit Recipe</button>
   `;
   footer.querySelector('[data-close]').addEventListener('click', () => closeModal('viewRecipeModal'));
 
@@ -1364,8 +1728,8 @@ function renderPantry() {
         <span class="pantry-item-name">${escHtml(item.name)}</span>
         ${item.amount ? `<span class="pantry-item-amount">${escHtml(item.amount)}</span>` : ''}
         <div class="pantry-actions">
-          <button class="btn-ghost" onclick="editPantryItem('${item.id}')">✏️</button>
-          <button class="btn-danger" onclick="deletePantryItem('${item.id}')">🗑</button>
+          <button class="btn-ghost" onclick="requireUnlock(() => editPantryItem('${item.id}'))">✏️</button>
+          <button class="btn-danger" onclick="requireUnlock(() => deletePantryItem('${item.id}'))">🗑</button>
         </div>
       </div>
     `).join('');
@@ -1374,7 +1738,7 @@ function renderPantry() {
 
 document.getElementById('pantrySearch').addEventListener('input', renderPantry);
 
-document.getElementById('addPantryBtn').addEventListener('click', () => {
+document.getElementById('addPantryBtn').addEventListener('click', () => requireUnlock(() => {
   const name = document.getElementById('pantryName').value.trim();
   if (!name) { showToast('Enter an ingredient name!'); return; }
   const amount = document.getElementById('pantryAmount').value.trim();
@@ -1384,7 +1748,7 @@ document.getElementById('addPantryBtn').addEventListener('click', () => {
   document.getElementById('pantryAmount').value = '';
   renderPantry();
   showToast('✅ Added to pantry!');
-});
+}));
 
 document.getElementById('pantryName').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('addPantryBtn').click();
@@ -1464,7 +1828,7 @@ document.getElementById('clearSelectionBtn').addEventListener('click', () => {
   renderGrocerySelector();
 });
 
-document.getElementById('generateListBtn').addEventListener('click', generateGroceryList);
+document.getElementById('generateListBtn').addEventListener('click', () => requireUnlock(generateGroceryList));
 
 function generateGroceryList() {
   if (state.grocerySelected.length === 0) {
@@ -1551,7 +1915,7 @@ function toggleGroceryCheck(key, el) {
   save();
 }
 
-document.getElementById('resetGroceryBtn').addEventListener('click', () => {
+document.getElementById('resetGroceryBtn').addEventListener('click', () => requireUnlock(() => {
   if (!confirm('Start fresh for a new week? This will clear the current grocery list and selections.')) return;
   state.grocerySelected = [];
   state.groceryList = null;
@@ -1560,7 +1924,7 @@ document.getElementById('resetGroceryBtn').addEventListener('click', () => {
   document.getElementById('groceryListOutput').style.display = 'none';
   renderGrocerySelector();
   showToast('🌸 Fresh start! Ready for a new week.');
-});
+}));
 
 document.getElementById('printGroceryBtn').addEventListener('click', () => window.print());
 
@@ -1593,10 +1957,14 @@ document.getElementById('dismissInstall').addEventListener('click', () => {
 });
 
 // ── INIT ───────────────────────────────────────────────
-load();
-renderCookbook();
-renderPantry();
-if (state.groceryList) renderGroceryListOutput();
+loadConfig();
+updateLockUI();
+(async () => {
+  await loadFromGitHub();
+  renderCookbook();
+  renderPantry();
+  if (state.groceryList) renderGroceryListOutput();
+})();
 
 // Register service worker for offline/PWA
 if ('serviceWorker' in navigator) {
