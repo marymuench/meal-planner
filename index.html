@@ -976,28 +976,37 @@ salt and pepper to taste" style="min-height:120px;"></textarea>
     </div>
     <div class="modal-body">
 
+
       <!-- Import / Export -->
       <h3 style="font-family:var(--font-display); font-size:1rem; color:var(--text-mid); margin-bottom:0.75rem;">Import & Export Data</h3>
-      <p style="font-size:13px; color:var(--text-light); margin-bottom:1rem; line-height:1.6;">Already have data from a previous session? Paste it below to load it in. You can also export your current data to back it up.</p>
-      <div style="display:flex; gap:8px; margin-bottom:1rem;">
-        <button class="btn-secondary" id="exportDataBtn" style="flex:1;">📤 Export current data</button>
-        <button class="btn-secondary" id="showImportBtn" style="flex:1;">📥 Import data</button>
+      <p style="font-size:13px; color:var(--text-light); margin-bottom:1rem; line-height:1.6;">
+        Move your data between devices by downloading/uploading a file, or copy and paste the raw data.
+      </p>
+
+      <p style="font-size:12px; font-weight:500; color:var(--text-mid); margin-bottom:6px;">Export</p>
+      <div style="display:flex; gap:8px; margin-bottom:1rem; flex-wrap:wrap;">
+        <button class="btn-secondary" id="exportFileBtn" style="flex:1;">📤 Download file</button>
+        <button class="btn-secondary" id="exportCopyBtn" style="flex:1;">📋 Copy to clipboard</button>
       </div>
-      <div id="importArea" style="display:none;">
-        <label>Paste your exported data here</label>
-        <textarea id="importJson" placeholder='Paste JSON data here…' style="min-height:100px; font-family:monospace; font-size:12px;"></textarea>
+      <div id="exportPasteArea" style="display:none; margin-bottom:1rem;">
+        <textarea id="exportJson" style="min-height:80px; font-family:monospace; font-size:11px;" readonly></textarea>
+      </div>
+
+      <p style="font-size:12px; font-weight:500; color:var(--text-mid); margin-bottom:6px;">Import</p>
+      <div style="display:flex; gap:8px; margin-bottom:0.75rem; flex-wrap:wrap;">
+        <button class="btn-secondary" id="importFileBtn" style="flex:1;">📥 Upload file</button>
+        <button class="btn-secondary" id="importPasteBtn" style="flex:1;">📋 Paste data</button>
+      </div>
+      <input type="file" id="importFileInput" accept=".json,application/json" style="display:none;">
+      <div id="importPasteArea" style="display:none; margin-bottom:0.5rem;">
+        <textarea id="importJson" placeholder="Paste exported JSON here…" style="min-height:80px; font-family:monospace; font-size:11px;"></textarea>
         <div style="display:flex; gap:8px; margin-top:8px; justify-content:flex-end;">
-          <button class="btn-ghost" id="cancelImportBtn">Cancel</button>
-          <button class="btn-primary" id="confirmImportBtn">✨ Import & Save</button>
+          <button class="btn-ghost" id="cancelImportPasteBtn">Cancel</button>
+          <button class="btn-primary" id="confirmImportPasteBtn">✨ Import</button>
         </div>
       </div>
-      <div id="exportArea" style="display:none;">
-        <label>Your data (copy all of this)</label>
-        <textarea id="exportJson" style="min-height:100px; font-family:monospace; font-size:12px;" readonly></textarea>
-        <div style="display:flex; gap:8px; margin-top:8px; justify-content:flex-end;">
-          <button class="btn-primary" id="copyExportBtn">📋 Copy to clipboard</button>
-        </div>
-      </div>
+      <div id="importStatus" style="font-size:13px; margin-top:4px;"></div>
+
 
       <div class="divider"></div>
 
@@ -1248,51 +1257,98 @@ document.getElementById('lockBtn').addEventListener('click', () => {
 
 // ── SETTINGS ───────────────────────────────────────────
 // ── IMPORT / EXPORT ────────────────────────────────────
-document.getElementById('showImportBtn').addEventListener('click', () => {
-  document.getElementById('importArea').style.display = 'block';
-  document.getElementById('exportArea').style.display = 'none';
+function getExportJson() { return JSON.stringify(state, null, 2); }
+
+// Export: download file
+document.getElementById('exportFileBtn').addEventListener('click', () => {
+  const blob = new Blob([getExportJson()], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mealplanner-backup.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('📤 File downloaded!');
+});
+
+// Export: copy to clipboard
+document.getElementById('exportCopyBtn').addEventListener('click', () => {
+  const json = getExportJson();
+  const pasteArea = document.getElementById('exportPasteArea');
+  const textarea = document.getElementById('exportJson');
+  textarea.value = json;
+  pasteArea.style.display = 'block';
+  textarea.select();
+  try {
+    navigator.clipboard.writeText(json).then(() => showToast('📋 Copied to clipboard!'));
+  } catch(e) {
+    document.execCommand('copy');
+    showToast('📋 Copied to clipboard!');
+  }
+});
+
+// Import: upload file
+document.getElementById('importFileBtn').addEventListener('click', () => {
+  document.getElementById('importFileInput').click();
+});
+
+document.getElementById('importFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('importStatus');
+  statusEl.style.color = 'var(--text-mid)';
+  statusEl.textContent = '⏳ Reading file…';
+  try {
+    const text = await file.text();
+    await doImport(JSON.parse(text));
+  } catch(err) {
+    statusEl.style.color = '#c94f50';
+    statusEl.textContent = '⚠️ Could not read that file — make sure it\'s a valid backup.';
+  }
+  e.target.value = '';
+});
+
+// Import: paste
+document.getElementById('importPasteBtn').addEventListener('click', () => {
+  document.getElementById('importPasteArea').style.display = 'block';
   document.getElementById('importJson').value = '';
   document.getElementById('importJson').focus();
 });
 
-document.getElementById('cancelImportBtn').addEventListener('click', () => {
-  document.getElementById('importArea').style.display = 'none';
+document.getElementById('cancelImportPasteBtn').addEventListener('click', () => {
+  document.getElementById('importPasteArea').style.display = 'none';
+  document.getElementById('importStatus').textContent = '';
 });
 
-document.getElementById('confirmImportBtn').addEventListener('click', async () => {
+document.getElementById('confirmImportPasteBtn').addEventListener('click', async () => {
   const raw = document.getElementById('importJson').value.trim();
+  const statusEl = document.getElementById('importStatus');
   if (!raw) { showToast('Paste some data first!'); return; }
   try {
-    const imported = JSON.parse(raw);
-    // Merge recipes and pantry, avoiding duplicates by id
-    const existingRecipeIds = new Set(state.recipes.map(r => r.id));
-    const existingPantryIds = new Set(state.pantry.map(p => p.id));
-    const newRecipes = (imported.recipes || []).filter(r => !existingRecipeIds.has(r.id));
-    const newPantry = (imported.pantry || []).filter(p => !existingPantryIds.has(p.id));
-    state.recipes = [...state.recipes, ...newRecipes];
-    state.pantry = [...state.pantry, ...newPantry];
-    await save();
-    closeModal('settingsModal');
-    renderCookbook();
-    renderPantry();
-    showToast(`✨ Imported ${newRecipes.length} recipe${newRecipes.length !== 1 ? 's' : ''} and ${newPantry.length} pantry item${newPantry.length !== 1 ? 's' : ''}!`);
-  } catch(e) {
-    showToast('⚠️ Could not read that data — make sure you copied it correctly.', 4000);
+    await doImport(JSON.parse(raw));
+  } catch(err) {
+    statusEl.style.color = '#c94f50';
+    statusEl.textContent = '⚠️ Could not read that data — make sure you copied it fully.';
   }
 });
 
-document.getElementById('exportDataBtn').addEventListener('click', () => {
-  document.getElementById('exportArea').style.display = 'block';
-  document.getElementById('importArea').style.display = 'none';
-  document.getElementById('exportJson').value = JSON.stringify(state, null, 2);
-});
-
-document.getElementById('copyExportBtn').addEventListener('click', () => {
-  const el = document.getElementById('exportJson');
-  el.select();
-  document.execCommand('copy');
-  showToast('📋 Copied to clipboard!');
-});
+async function doImport(imported) {
+  const statusEl = document.getElementById('importStatus');
+  if (!imported.recipes && !imported.pantry) throw new Error('Unrecognised format');
+  const existingRecipeIds = new Set(state.recipes.map(r => r.id));
+  const existingPantryIds = new Set(state.pantry.map(p => p.id));
+  const newRecipes = (imported.recipes || []).filter(r => !existingRecipeIds.has(r.id));
+  const newPantry = (imported.pantry || []).filter(p => !existingPantryIds.has(p.id));
+  state.recipes = [...state.recipes, ...newRecipes];
+  state.pantry = [...state.pantry, ...newPantry];
+  await save();
+  closeModal('settingsModal');
+  renderCookbook();
+  renderPantry();
+  showToast(`✨ Imported ${newRecipes.length} recipe${newRecipes.length !== 1 ? 's' : ''} and ${newPantry.length} pantry item${newPantry.length !== 1 ? 's' : ''}!`);
+}
 
 
 document.getElementById('settingsBtn').addEventListener('click', () => {
@@ -1301,8 +1357,9 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('ghToken').value = ghConfig.token;
   document.getElementById('ghPassword').value = ghConfig.password;
   document.getElementById('settingsStatus').textContent = '';
-  document.getElementById('importArea').style.display = 'none';
-  document.getElementById('exportArea').style.display = 'none';
+  document.getElementById('importStatus').textContent = '';
+  document.getElementById('importPasteArea').style.display = 'none';
+  document.getElementById('exportPasteArea').style.display = 'none';
   openModal('settingsModal');
 });
 
